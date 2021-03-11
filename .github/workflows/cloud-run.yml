@@ -4,61 +4,48 @@ on:
   push:
     branches:
     - main
-
+    - release**
 env:
   PROJECT_ID: ${{ secrets.RUN_PROJECT }}
   RUN_REGION: us-central1
   SERVICE_NAME: helloworld-python
+  GCP_PROJECT_ID_PREFIX: 'actiontest'
 
 jobs:
   setup-build-deploy:
-    name: Setup, Build, and Deploy
+    name: "Setup, Build, and Deploy - '${{github.ref}}'"
     runs-on: ubuntu-latest
 
     steps:
     - name: Checkout
       uses: actions/checkout@v2
-
-    # Setup gcloud CLI
+    
+    - name: Set env
+      run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+    
+    - name: Test
+      run: |
+          echo $RELEASE_VERSION
+          echo ${{ env.RELEASE_VERSION }}  
+    # Setup gcloud CLI  
     - uses: GoogleCloudPlatform/github-actions/setup-gcloud@master
       with:
         version: '290.0.1'
         service_account_key: ${{ secrets.RUN_SA_KEY }}
         project_id: ${{ secrets.RUN_PROJECT }}
 
-    # Build and push image to Google Container Registry
+    # Build and push image to Google Container Registry  
     - name: Build
       run: |-
         gcloud builds submit \
           --quiet \
-          --tag "gcr.io/$PROJECT_ID/$SERVICE_NAME:$GITHUB_SHA"
-    
-    # Build and push image to Google Container Registry
-    - name: infra form submit
-      run: |-
-        curl -X POST http://35.205.77.100:5000/InfraCommand/acemicro@hcl.com/GCP/IkeaTrial/usecase1/install-infra \
-             -H 'Content-Type: application/x-www-form-urlencoded' \
-             -d 'flowId=${{secrets.IS_FLOWID}}' \
-             -d 'Client_Email=${{secrets.IS_CLIENT_EMAIL}}' \
-             -d 'GCE_Project_Id=${{secrets.IS_GCE_PROJECT_ID}}' \
-             -d 'GCE_Client_Id=${{secrets.IS_GCE_CLIENT_ID}}' \
-             -d 'GCE_Private_Key_Id=${{secrets.IS_GCE_PRIVATE_KEY_ID}}' \  
-             -d 'GCE_Private_Key=${{secrets.IS_GCE_PRIVATE_KEY}}' \ 
-             -d 'Client_Certificate_URL=${{secrets.IS_CLIENT_CERTIFICATE_URL}}'
-    
-    # call istudio api
-    - name: infra call
-      uses: satak/webrequest-action@master
-      with:
-        url: http://35.205.77.100:5000/InfraCommand/acemicro@hcl.com/GCP/IkeaTrial/usecase1/install-infra
-        method: POST
-        payload: '{"flowId": "${{secrets.IS_FLOWID}}", "Client_Email":"${{secrets.IS_CLIENT_EMAIL}}", "GCE_Project_Id":"${{secrets.IS_GCE_PROJECT_ID}}","GCE_Client_Id":"${{secrets.IS_GCE_CLIENT_ID}}", "GCE_Private_Key_Id":"${{secrets.IS_GCE_PRIVATE_KEY_ID}}", "GCE_Private_Key" : "${{secrets.IS_GCE_PRIVATE_KEY}}","Client_Certificate_URL":"${{secrets.IS_CLIENT_CERTIFICATE_URL}}"}'
-    
-    # Setup terraform CLI
+          --tag "gcr.io/$PROJECT_ID/$SERVICE_NAME:devlatest4"
+  
+    #Terraform remote state GCS
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v1
-    
-    # Terraform script checkout
+
+    # Terraform script checkout 
     - name: Terraform repository checkout 
       uses: actions/checkout@v2
       with:
@@ -66,7 +53,7 @@ jobs:
         path: istudio-tf-scripts        
         ssh-strict: false
         #ssh-key: ${{ secrets.MGMT_SSH }}
-    
+
     - name: Terraform init
       id: init
       run: terraform init
@@ -74,32 +61,34 @@ jobs:
       working-directory: ./istudio-tf-scripts
       env:
         GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-      
-    - name: Terraform Refresh
-      id: refresh
-      run: terraform refresh
-      continue-on-error: false
-      working-directory: ./istudio-tf-scripts
-      env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-    
+
     - name: Terraform Plan
       id: plan
       run: terraform plan
       continue-on-error: false
       working-directory: ./istudio-tf-scripts
       env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}   
     
-    # Deploy image to Cloud Run
-    - name: Deploy
+    - name: Terraform apply
+      id: apply
+      run: terraform apply -auto-approve
+      continue-on-error: false
+      working-directory: ./istudio-tf-scripts
+      env:
+        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }} 
+    
+    # provisioning and deploy from iStudio
+    - name: iStudio provisioning
+      continue-on-error: false
       run: |-
-        gcloud run deploy "$SERVICE_NAME" \
-          --quiet \
-          --region "$RUN_REGION" \
-          --image "gcr.io/$PROJECT_ID/$SERVICE_NAME:$GITHUB_SHA" \
-          --platform "managed" \
-          --allow-unauthenticated
+        curl -X POST http://istudio.thecloudbridge.net:5000/InfraCommand/acemicro@hcl.com/GCP/IkeaTrial/usecase2/install-infra \
+             -d 'Client_Email=${{secrets.IS_CLIENT_EMAIL}}' \
+             -d 'GCE_Project_Id=${{secrets.IS_GCE_PROJECT_ID}}' \
+             -d 'GCE_Client_Id=${{secrets.IS_GCE_CLIENT_ID}}' \
+             -d 'GCE_Private_Key_Id=${{secrets.IS_GCE_PRIVATE_KEY_ID}}' \
+             -d 'GCE_Private_Key=${{secrets.IS_GCE_PRIVATE_KEY}}' \
+             -d 'Client_Certificate_URL=${{secrets.IS_CLIENT_CERTIFICATE_URL}}'	
     
     #check service availability       
     - name: Check the deployed service URL
